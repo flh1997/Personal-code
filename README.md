@@ -1,4 +1,4 @@
-# Personal-code
+# Yield Curve Spread Trades
 some homework project
 A yield curve spread is the yield differential between two different maturities of a bond issuer i.e. 10 yr U.S. Treasury yield - 2 yr U.S. Treasury yield. The later maturity leg of the trade is referred to as the back leg and the trade leg maturing earlier is called the front leg. Two primary yield curve spread strategies are the flattener and the steepener. The risk measure for yield curve spread trades is DV01 (dollar value of a basis point), As the back leg DV01 is greater than the front leg DV01, one must calculate a hedge ratio to result in a DV01 neutral position.
 
