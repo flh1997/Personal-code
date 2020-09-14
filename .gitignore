@@ -1,39 +1,247 @@
-# History files
-.Rhistory
-.Rapp.history
+library(tidyr)
+library(ggplot2)
+library(reshape2)
+library(readxl)
 
-# Session Data files
-.RData
+options(scipen = 999)
 
-# User-specific files
-.Ruserdata
+# Data description is on pp.32 
+# Link to report - https://www.federalreserve.gov/pubs/feds/2006/200628/200628pap.pdf
 
-# Example code in package build process
-*-Ex.R
+#User-defined functions
+duration<-function(C,FV,m,YTM){
+  numerator<-FV*m/(1+YTM)^m
+  price<-FV/(1+YTM)^m
+  for (t in 1:m) {
+    numerator<-numerator+C*t/(1+YTM)^t
+    price<-price+C/(1+YTM)^t
+    # message(numerator," ",price)
+  }
+  D<-numerator/price
+  MD<-D/(1+YTM)
+  DV01<-MD*price/10000
+  return(c(D,MD,DV01))
+}
+convexity<-function(C,FV,m,YTM){
+  numerator<-FV*m*(m+1)/(1+YTM)^m
+  price<-FV/(1+YTM)^m
+  for (t in 1:m) {
+    numerator<-numerator+C*(t^2+t)/(1+YTM)^t
+    price<-price+C/(1+YTM)^t
+    # message(numerator," ",price)
+  }
+  C<-numerator/(price*(1+YTM)^2)
+  return(C)
+}
+ytm_table<-function(input, required_maturities){
+  YTM<-matrix(nrow = nrow(Data),ncol = (length(required_maturities)+1)) %>% as.data.frame()
+  colnames(YTM)<-c("Date",paste0(required_maturities,"y"))
+  YTM$Date<-as.Date(Data$...1)
+  for (row in 1:nrow(Data)) {
+    beta_0<-Data[row,"BETA0"] %>% as.numeric()
+    beta_1<-Data[row,"BETA1"] %>% as.numeric()
+    beta_2<-Data[row,"BETA2"] %>% as.numeric()
+    beta_3<-Data[row,"BETA3"] %>% as.numeric()
+    for (m in 1:length(required_maturities)) {
+      t1<-required_maturities[m]/as.numeric(Data[row,"TAU1"])
+      t2<-required_maturities[m]/as.numeric(Data[row,"TAU2"])
+      r<-beta_0+beta_1*(1-exp(-t1))/t1+beta_2*((1-exp(-t1))/t1-exp(-t1))+
+        beta_3*((1-exp(-t2))/t2-exp(-t2))
+      YTM[row,(m+1)]<-r
+    }
+  }
+  return(YTM)
+}
+dv01_table<-function(Data,YTM,required_maturities){
+  DV01<-matrix(nrow = nrow(Data),ncol = (length(required_maturities)+1)) %>% as.data.frame()
+  colnames(DV01)<-c("Date",paste0(required_maturities,"y"))
+  DV01$Date<-as.Date(Data$...1)
+  for (row in 1:nrow(Data)) {
+    for (m in 1:length(required_maturities)) {
+      C<-0
+      r<-YTM[row,(1+m)]/100
+      DV01[row,(m+1)]<-duration(C,100,required_maturities[m],r)[3]
+    }
+  }
+  return(DV01)
+}
+prices_table<-function(Data,YTM,required_maturities){
+  Prices<-matrix(nrow = nrow(Data),ncol = (length(required_maturities)+1)) %>% as.data.frame()
+  colnames(Prices)<-c("Date",paste0(required_maturities,"y"))
+  Prices$Date<-as.Date(Data$...1)
+  for (row in 1:nrow(Prices)) {
+    for (m in 1:length(required_maturities)) {
+      C<-0
+      r<-YTM[row,(1+m)]/100
+      Prices[row,(m+1)]<-100/(1+r)^required_maturities[m]
+    }
+  }
+  return(Prices)
+}
+convexity_table<-function(Data,YTM,required_maturities){
+  Convexity<-matrix(nrow = nrow(Data),ncol = (length(required_maturities)+1)) %>% as.data.frame()
+  colnames(Convexity)<-c("Date",paste0(required_maturities,"y"))
+  Convexity$Date<-as.Date(Data$...1)
+  for (row in 1:nrow(Data)) {
+    for (m in 1:length(required_maturities)) {
+      C<-0
+      r<-YTM[row,(1+m)]/100
+      Convexity[row,(m+1)]<-convexity(C,100,required_maturities[m],r)
+    }
+  }
+  return(Convexity)
+}
+#All the returns will be expressed as changed of $100 over the trading period
+cum_100usd<-function(Data){
+  returns<-vector('logical',length(Data))
+  returns[1]<-100
+  for (i in 2:length(Data)) {
+    returns[i]<-returns[i-1]*(as.vector(Data[i])/as.vector(Data[i-1]))
+  }
+  return(returns)
+} 
 
-# Output files from R CMD build
-/*.tar.gz
+#Data upload and creation
+Data<-read_xlsx("C:/Users/think/Desktop/feds200628.xlsx")
+YTM<-ytm_table(Data,c(2,10,1.980769,9.980769,1/52))
+DV01<-dv01_table(Data,YTM,c(2,10))
+Prices<-prices_table(Data,YTM,c(2,10,1.980769,9.980769))
 
-# Output files from R CMD check
-/*.Rcheck/
+Trading<-merge.data.frame(Prices,YTM, by="Date") %>% merge.data.frame(DV01,by="Date")
+names(Trading)<-c("Date","Pr_2y","Pr_10y","Pr_2y-1w","Pr_10y-1w","YTM_2y","YTM_10y",
+                  "YTM_2y-1w","YTM_10y-1w","YTM_1w","DV01_2y","DV01_10y")
+Trading$Date<-as.Date(Trading$Date)
+Trading <- subset(Trading,Date>=as.Date("1983-12-30") & 
+                    weekdays(Date)==weekdays(as.Date("1983-12-30")))
+Trading$Margin<-1000000 #This value is later changed inside the loop
 
-# RStudio files
-.Rproj.user/
+#Task 1
+#Flattener strategy (spread-trading)
+#Buy (long) N 10y Bonds and sell (short) M 2y Bonds
+for (i in 2:nrow(Trading)) {
+  #Compute the weights by solving the SLE
+  # 1)0.1(yP_2+xP_10)=Port  2)-yDV01_2+x*DV01_10=0
+  a<-c(0.1*Trading$Pr_2y[i-1],0.1*Trading$Pr_10y[i-1],Trading$DV01_2y[i-1],-Trading$DV01_10y[i-1]) %>%
+    matrix(2,2,T)
+  b<-c(Trading$Margin[i-1],0) %>% matrix(2,1)
+  Weight_2y<-solve(a,b)[1]
+  Weight_10y<-solve(a,b)[2]
+  #Buy (long) N 10y Bonds and sell (short) M 2y Bonds
+  Bond_position_t0<- -Trading$Pr_10y[i-1]*Weight_10y+Weight_2y*Trading$Pr_2y[i-1]
+  Bond_position_t1<- Trading$`Pr_10y-1w`[i]*Weight_10y-Weight_2y*Trading$`Pr_2y-1w`[i]
+  #Interest on cash
+  Cash_t0<-Trading$Margin[i-1]+Bond_position_t0
+  Cash_t1<-Cash_t0*(1+Trading$YTM_1w[i-1]/100/52)
+  #Profit at the end of the week and new margin
+  Profit<-(Cash_t1-Cash_t0)+(Bond_position_t1+Bond_position_t0)
+  Trading$Margin[i]<-Trading$Margin[i-1]+Profit
+}
+Trading$cum_ret<- cum_100usd(Trading$Margin)
+#Graph
+ggplot(Trading,aes(Date,cum_ret))+
+  geom_hline(yintercept = 100, alpha=0.5, linetype="dashed")+
+  geom_line(color="springgreen4",alpha=0.95)+theme_classic()+
+  labs(title="Cumulative return for $100",subtitle = "For the period 1983-2019",x="",y="")+
+  theme(plot.title = element_text(hjust = 0.5),plot.subtitle =  element_text(hjust = 0.5))+
+  scale_x_date(breaks = "5 years", date_minor_breaks = "2 years",date_labels = "%Y")
 
-# produced vignettes
-vignettes/*.html
-vignettes/*.pdf
+#Task 2
+#Compute convexity
+Convexity<-convexity_table(Data,YTM,c(2,10))
+Trading<-merge(Trading,Convexity)
+names(Trading)[c(15,16)]<-c("Conv_2y","Conv_10y")
+Trading$Conv_risk<-NA
+#Convexity risk is the dollar change in the price of the portfolio
+for (i in 2:nrow(Trading)) {
+  Weight_10y<-1000000/100
+  Weight_2y<-Trading$DV01_10y[i-1]*Weight_10y/Trading$DV01_2y[i-1]
+  #Portfolio convexity is the weighted average of bond convexities
+  Port_conv<-(Weight_10y*Trading$Conv_10y[i-1]*Trading$Pr_10y[i-1]-Weight_2y*Trading$Conv_2y[i-1]*Trading$Pr_2y[i-1])
+  #Buy (long) N 10y Bonds and sell (short) M 2y Bonds
+  Trading$Conv_risk[i]<-0.5*Port_conv*0.001^2
+}
+#Graph
+ggplot(Trading,aes(Date,Conv_risk))+
+  geom_line(color="springgreen4",alpha=0.95)+  theme_classic()+
+  labs(title="Convexity risk",x="",y="")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_x_date(breaks = "5 years", date_minor_breaks = "2 years",date_labels = "%Y")
 
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
-.httr-oauth
+#Task 3
+for (i in 2:nrow(Trading)) {
+  #Compute the weights by solving the SLE
+  # 1)0.1(yP_2+xP_10)=Port  2)-yDV01_2+x*DV01_10=0
+  a<-c(0.1*Trading$Pr_2y[i-1],0.1*Trading$Pr_10y[i-1],Trading$DV01_2y[i-1],-Trading$DV01_10y[i-1]) %>%
+    matrix(2,2,T)
+  b<-c(Trading$Margin[i-1],0) %>% matrix(2,1)
+  Weight_2y<-solve(a,b)[1]
+  Weight_10y<-solve(a,b)[2]
+  #Buy (long) N 10y Bonds and sell (short) M 2y Bonds
+  Bond_position_t0<- -Trading$Pr_10y[i-1]*Weight_10y+Weight_2y*Trading$Pr_2y[i-1]
+  Bond_position_t1<- Trading$`Pr_10y-1w`[i]*Weight_10y-Weight_2y*Trading$`Pr_2y-1w`[i]
+  #Interest on cash
+  Cash_t0<-Trading$Margin[i-1]+Bond_position_t0
+  Cash_t1<-Cash_t0*(1+Trading$YTM_1w[i-1]/100/52)
+  #Profit at the end of the week and new margin
+  Profit<-(Cash_t1-Cash_t0)+(Bond_position_t1+Bond_position_t0)
+  Trading$Margin[i]<-Trading$Margin[i-1]+Profit
+  Trading$Spread_ret[i]<- ((-Weight_10y*Trading$DV01_10y[i-1]*(Trading$YTM_10y[i]-
+                            Trading$YTM_10y[i-1])/100+Weight_2y*Trading$DV01_2y[i-1]*
+                          (Trading$YTM_2y[i]-Trading$YTM_2y[i-1])/100)/Trading$Margin[1])*100*10000
+  
+  
+   Trading$Conv_ret[i]<- (0.5*(Weight_10y*Trading$Pr_10y[i-1]*Trading$Conv_10y[i-1]*
+                            ((Trading$YTM_10y[i]-Trading$YTM_10y[i-1])/100)^2-
+                              Weight_2y*Trading$Pr_2y[i-1]*Trading$Conv_2y[i-1]*
+                              ((Trading$YTM_2y[i]-Trading$YTM_2y[i-1])/100)^2)/Trading$Margin[1])*100
+   
+   Trading$Time_ret[i]<- (Weight_10y*Trading$Pr_10y[i-1]*(Trading$`Pr_10y-1w`[i-1]/Trading$Pr_10y[i-1]-1)-Weight_2y*Trading$Pr_2y[i-1]*(Trading$`Pr_2y-1w`[i-1]/Trading$Pr_2y[i-1]-1)+ Cash_t1-Cash_t0 )/Trading$Margin[1]*100
+  
+  
+}
 
-# knitr and R markdown default cache directories
-*_cache/
-/cache/
+for(i in 2:nrow(Trading)){
+  Trading$sum[1] = 0
+  Trading$sum[i] <- Trading$sum[i-1] + Trading$Spread_ret[i]
+}
 
-# Temporary files created by R markdown
-*.utf8.md
-*.knit.md
+for(i in 2:nrow(Trading)){
+  Trading$sum2[1] = 0
+  Trading$sum2[i] <- Trading$sum2[i-1] + Trading$Conv_ret[i]
+}
 
-# R Environment Variables
-.Renviron
+for(i in 2:nrow(Trading)){
+  Trading$sum3[1] = 0
+  Trading$sum3[i] <- Trading$sum3[i-1] + Trading$Time_ret[i]
+}
+
+Returns_2 <- data.frame(Trading$Date,(Trading$cum_ret-100),Trading$sum,Trading$sum2,Trading$sum3)
+names(Returns_2) <- c("Trading.Date","cum","Trading.sum","Trading.sum2","Trading.sum3")
+ggplot()+geom_line(data = Returns_2,aes(x = Trading.Date,y = Trading.sum,colour = "Spread"),size=1)+geom_line(data = Returns_2,aes(x = Trading.Date,y = Trading.sum2,colour = "Convexity"),size=1)+geom_line(data = Returns_2,aes(x = Trading.Date,y = Trading.sum3,colour = "Time"),size=1)+geom_line(data = Returns_2,aes(x = Trading.Date,y = cum,colour = "Total"),size=1)
+
+
+#Task 4
+#It's similar to task 1, therefore all the methods are the same
+#The only difference is the new margin requirement
+Trading$Margin_2<-1000000
+for (i in 2:nrow(Trading)) {
+  a<-c(0.02*Trading$Pr_2y[i-1],0.02*Trading$Pr_10y[i-1],Trading$DV01_2y[i-1],-Trading$DV01_10y[i-1]) %>%
+    matrix(2,2,T)
+  b<-c(Trading$Margin_2[i-1],0) %>% matrix(2,1)
+  Weight_2y<-solve(a,b)[1]
+  Weight_10y<-solve(a,b)[2]
+  Bond_position_t0<- -Trading$Pr_10y[i-1]*Weight_10y+Weight_2y*Trading$Pr_2y[i-1]
+  Bond_position_t1<- Trading$`Pr_10y-1w`[i]*Weight_10y-Weight_2y*Trading$`Pr_2y-1w`[i]
+  Cash_t0<-Trading$Margin_2[i-1]+Bond_position_t0
+  Cash_t1<-Cash_t0*(1+Trading$YTM_1w[i-1]/100/52)
+  Profit<-(Cash_t1-Cash_t0)+(Bond_position_t1+Bond_position_t0)
+  Trading$Margin_2[i]<-Trading$Margin_2[i-1]+Profit
+}
+Trading$cum_ret<- cum_100usd(Trading$Margin_2)
+#Graph
+ggplot(Trading,aes(Date,cum_ret))+
+  geom_hline(yintercept = 100, alpha=0.5, linetype="dashed")+
+  geom_line(color="springgreen4",alpha=0.95)+theme_classic()+
+  labs(title="Cumulative return for $100",subtitle = "For the period 1983-2019",x="",y="")+
+  theme(plot.title = element_text(hjust = 0.5),plot.subtitle =  element_text(hjust = 0.5))+
+  scale_x_date(breaks = "5 years", date_minor_breaks = "2 years",date_labels = "%Y")
